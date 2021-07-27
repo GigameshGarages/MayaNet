@@ -1,4 +1,4 @@
-# TicTacToe - Example for illustrative purposes only.
+# Maya Magic Maze - Example for illustrative purposes only.
 
 import smartpy as sp
 
