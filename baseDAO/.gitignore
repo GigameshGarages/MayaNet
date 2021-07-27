@@ -1,0 +1,12 @@
+# SPDX-FileCopyrightText: 2021 TQ Tezos
+# SPDX-License-Identifier: LicenseRef-MIT-TQ
+
+.stack-work/
+
+# Build output
+out
+
+# npm
+/typescript/baseDAO/node_modules
+/typescript/baseDAO/yarn-error.log
+/typescript/baseDAO/dist

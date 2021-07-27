@@ -1,0 +1,195 @@
+# SPDX-FileCopyrightText: 2021 TQ Tezos
+# SPDX-License-Identifier: LicenseRef-MIT-TQ
+
+env:
+  TEZOS_CLIENT_UNSAFE_DISABLE_DISCLAIMER: "Y"
+  # this key is defined in local-chain bootstrap accounts list in
+  # https://github.com/serokell/serokell-profiles/blob/master/profiles/servers/jupiter/default.nix
+  TASTY_NETTEST_IMPORT_SECRET_KEY: "unencrypted:edsk3nAQ3uCP7vc2ccLhhWNNncgFfWQ5HgTyPawepQ8DURRRfzVQzB"
+
+steps:
+  - label: hlint
+    if: &not_scheduled
+     build.source != "schedule"
+    commands:
+    - nix run -f ci.nix pkgs.hlint -c
+        ./scripts/lint.sh
+
+  - label: reuse lint
+    if: *not_scheduled
+    commands:
+    - nix run -f ci.nix pkgs.reuse -c
+        reuse lint
+
+  - label: check trailing whitespace
+    if: *not_scheduled
+    commands:
+    - .buildkite/check-trailing-whitespace.sh
+
+  - label: xrefcheck
+    if: *not_scheduled
+    commands:
+    - nix run -f ci.nix xrefcheck -c xrefcheck
+    retry:
+      automatic:
+        limit: 1
+
+  - label: check cabal files
+    if: *not_scheduled
+    commands:
+    - nix run -f ci.nix stack2cabal pkgs.diffutils -c ./scripts/ci/validate-cabal-files.sh
+
+  - label: build-ligo
+    key: build-ligo
+    if: *not_scheduled
+    commands:
+    - nix-build ci.nix -A build-ligo -o ./ligo-out/
+    - nix run -f ci.nix morley -c morley optimize --contract ./ligo-out/baseDAO.tz --output baseDAO.tz
+    - cp ./ligo-out/trivialDAO_storage.tz trivialDAO_storage.tz
+    - cp ./ligo-out/registryDAO_storage.tz registryDAO_storage.tz
+    - cp ./ligo-out/treasuryDAO_storage.tz treasuryDAO_storage.tz
+    artifact_paths:
+      - baseDAO.tz
+      - trivialDAO_storage.tz
+      - registryDAO_storage.tz
+      - treasuryDAO_storage.tz
+
+  - label: build-haskell
+    key: build-haskell
+    if: *not_scheduled
+    commands:
+    - nix-build ci.nix -A all-components
+
+  - label: bats
+    if: *not_scheduled
+    depends_on: build-haskell
+    commands:
+    - nix run -f ci.nix
+          tezos-client
+          pkgs.bats
+          packages.baseDAO-ligo-meta.exes.baseDAO-ligo-meta
+        -c bats ./scripts/test.bats
+
+  - label: ligo-test
+    key: ligo-test
+    if: *not_scheduled
+    depends_on:
+      - build-ligo
+      - build-haskell
+    commands:
+    - nix-build ci.nix -A packages.baseDAO-ligo-meta.tests.baseDAO-test
+    - ./result/bin/baseDAO-test --nettest-no-run-network
+
+    # Get `known_metadata.json` artifact
+    - nix run -f ci.nix
+          packages.baseDAO-ligo-meta.exes.baseDAO-ligo-meta
+        -c baseDAO-ligo-meta print-metadata > known_metadata.json
+    artifact_paths:
+      - known_metadata.json
+
+  # TODO #124 uncomment:
+  # - label: ligo-test-local-chain-009
+  #   env:
+  #     TASTY_NETTEST_NODE_ENDPOINT: "http://localhost:8734"
+  #   if: *not_scheduled
+  #   depends_on:
+  #     - build-ligo
+  #     - build-haskell
+  #     - ligo-test
+  #     # NOTE ^ this last dependency is not strictly necessary, but it saves us
+  #     # from building the tests twice and 'ligo-test' running time is mostly that.
+  #   commands: &ligo-nettest
+  #   - nix-build ci.nix -A packages.baseDAO-ligo-meta.tests.baseDAO-test
+  #   - export TASTY_NETTEST_DATA_DIR="$(mktemp -d --tmpdir="$$PWD")"
+  #   - nix run -f ci.nix tezos-client -c
+  #     ./result/bin/baseDAO-test --nettest-run-network
+  #       --pattern '\$1 == "On network" || \$NF == "On network" || \$0 ~ /.On network./'
+
+  # TODO #124 uncomment:
+  # - label: ligo-test-local-chain-010
+  #   env:
+  #     TASTY_NETTEST_NODE_ENDPOINT: "http://localhost:8733"
+  #   if: *not_scheduled
+  #   depends_on:
+  #     - build-ligo
+  #     - build-haskell
+  #     - ligo-test
+  #     # NOTE ^ this last dependency is not strictly necessary, but it saves us
+  #     # from building the tests twice and 'ligo-test' running time is mostly that.
+  #   commands: *ligo-nettest
+
+  - label: check typescript api
+    if: *not_scheduled
+    depends_on:
+      - build-ligo
+      - build-haskell
+    commands:
+      - nix run -f ci.nix packages.baseDAO-ligo-meta.exes.baseDAO-ligo-meta pkgs.diffutils -c ./scripts/ci/validate-typescript-api.sh
+
+
+  - label: typescript-build
+    if: *not_scheduled
+    depends_on:
+      - build-ligo
+      - build-haskell
+    commands:
+    - nix-build ci.nix -A build-typescript --arg release false
+
+  - label: weeder
+    if: *not_scheduled
+    depends_on: build-haskell
+    commands:
+    - nix-build ci.nix -A weeder-script
+    - ./result
+
+  - label: haddock
+    if: *not_scheduled
+    depends_on: build-haskell
+    commands:
+    - nix-build ci.nix -A haddock --no-out-link
+
+  # TODO #124 uncomment:
+  # - label: scheduled florencenet ligo test
+  #   if: build.source == "schedule"
+  #   env:
+  #     TASTY_NETTEST_NODE_ENDPOINT: "http://florence.testnet.tezos.serokell.team:8732"
+  #   depends_on:
+  #     - build-ligo
+  #     - build-haskell
+  #   commands: *ligo-nettest
+  #   retry:
+  #     automatic:
+  #       limit: 1
+
+  # TODO #124 uncomment:
+  # - label: scheduled granadanet ligo test
+  #   if: build.source == "schedule"
+  #   env:
+  #     TASTY_NETTEST_NODE_ENDPOINT: "http://granada.testnet.tezos.serokell.team:8732"
+  #   depends_on:
+  #     - build-ligo
+  #     - build-haskell
+  #   commands: *ligo-nettest
+  #   retry:
+  #     automatic:
+  #       limit: 1
+
+  - label: create auto prerelease
+    if: build.branch == "master" && build.source != "schedule"
+    depends_on: ligo-test
+    commands:
+      - mkdir assets
+      - buildkite-agent artifact download baseDAO.tz assets --step "build-ligo"
+      - buildkite-agent artifact download trivialDAO_storage.tz assets --step "build-ligo"
+      - buildkite-agent artifact download treasuryDAO_storage.tz assets --step "build-ligo"
+      - buildkite-agent artifact download registryDAO_storage.tz assets --step "build-ligo"
+      - buildkite-agent artifact download known_metadata.json assets --step "ligo-test"
+      - nix run -f ci.nix pkgs.gitAndTools.gh -c gh release delete auto-release --yes || true
+      - nix run -f ci.nix pkgs.git -c git fetch && git tag -f auto-release && git push --force --tags
+      - nix run -f ci.nix pkgs.gitAndTools.gh -c gh release create --prerelease auto-release --title auto-release --notes ""
+      - nix run -f ci.nix pkgs.gitAndTools.gh -c gh release upload auto-release assets/*
+
+
+notify:
+  - email: "tezos-alerts@serokell.io"
+    if: build.state == "failed" && build.source == "schedule"

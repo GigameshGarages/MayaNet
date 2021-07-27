@@ -1,0 +1,9 @@
+# SPDX-FileCopyrightText: 2021 TQ Tezos
+# SPDX-License-Identifier: LicenseRef-MIT-TQ
+
+resolver: haskell/snapshot.yaml
+
+packages:
+  - haskell
+
+# See extra-deps in haskell/snapshot.yaml
